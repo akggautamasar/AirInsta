@@ -15,6 +15,7 @@
 - Save favorite links and recent links **locally in the device's browser**.
 - Responsive dark/light UI with an Instagram-inspired aesthetic.
 - Install as an Android/desktop Progressive Web App (PWA), including an offline application shell.
+- Use the separate native Android app in `android/`: receive a link from Android's share sheet, preview media without cropping, navigate carousels, and save files through Android Downloads.
 - Basic API validation, safe download filename handling, approved CDN domain validation and streaming with HTTP Range support.
 
 ## Stack
@@ -37,6 +38,12 @@
 4. Deploy the `main` branch. Vercel will serve the static interface and both API functions on the same origin.
 
 To run the static interface locally with working API functions, use `vercel dev` from the project directory after linking your Vercel account. Opening `index.html` directly in a file browser will not run the API functions.
+
+## Native Android app
+
+`android/` is a separate Android application written in Java with native controls, not a website wrapper. It supports Android 10 and newer. The app calls the existing AirInsta API and therefore needs an internet connection; its interface and Android Downloads integration are separate from the website.
+
+Open `android/` in Android Studio with JDK 17 and Android SDK 35, or build with Gradle 8.10.2 using `gradle :app:assembleDebug`. The debug APK is produced at `android/app/build/outputs/apk/debug/app-debug.apk`. The Android GitHub Actions workflow builds the same installable debug APK and keeps it as an Actions artifact. A production release needs a private signing key and a release build.
 
 ## API response compatibility
 
@@ -93,3 +100,4 @@ AirInsta/
 ```
 
 Built for **WorksBeyondWorks**.
+

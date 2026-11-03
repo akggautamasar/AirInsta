@@ -1,5 +1,5 @@
 /* AirInsta: offline app shell only. Never cache Instagram API or media. */
-const CACHE = "airinsta-shell-v1";
+const CACHE = "airinsta-shell-v2";
 const SHELL = ["/", "/index.html", "/assets/app.css", "/assets/app.js", "/icon.svg", "/icon-192.svg"];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -17,3 +17,4 @@ self.addEventListener("fetch", event => {
     return response;
   }).catch(() => caches.match(event.request).then(cached => cached || (event.request.mode === "navigate" ? caches.match("/") : Response.error()))));
 });
+
