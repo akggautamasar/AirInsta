@@ -225,6 +225,8 @@
     }
     if (state.items.length > 1) stage.appendChild(textNode("span", "media-counter", (state.active + 1) + " / " + state.items.length));
     $("mediaPosition").textContent = (state.active + 1) + " of " + state.items.length;
+    $("mediaHint").textContent = item.type === "video"
+      ? "Full frame preview · Use the player controls for fullscreen" : "Full frame preview";
     $("activeMediaType").textContent = item.type === "video" ? "Video" : "Photo";
     $("currentKind").textContent = item.type === "video" ? "video" : "photo";
     $("prevMedia").disabled = state.items.length < 2;

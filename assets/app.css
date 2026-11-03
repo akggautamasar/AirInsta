@@ -26,3 +26,5 @@
 @media(max-width:480px){.result-section .section-heading{align-items:flex-start;flex-wrap:wrap}.result-verified{white-space:normal}.creator{min-width:0}.result-tools{flex-shrink:0}.result-body{min-width:0}.media-stage{aspect-ratio:var(--media-ratio);max-height:none}}
 
 .caption-actions{display:flex;gap:18px;flex-wrap:wrap}
+
+[data-theme="light"] .result-verified{color:#427d54}
