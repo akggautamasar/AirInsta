@@ -165,6 +165,8 @@
     $("postCaption").classList.remove("expanded");
     $("captionExpand").hidden = !state.meta.caption || state.meta.caption.length <= 180;
     $("captionExpand").textContent = "Show more";
+    $("captionExpand").setAttribute("aria-expanded", "false");
+    $("copyCaption").hidden = !state.meta.caption;
     $("openOriginal").href = state.url;
     $("downloadAll").hidden = state.items.length < 2;
     $("allItemCount").textContent = state.items.length + " files";
@@ -306,11 +308,35 @@
     put32(e, 12, centralSize); put32(e, 16, offset);
     return new Blob(parts.concat(central, [end]), { type: "application/zip" });
   }
+  async function readLimitedMedia(response, remaining) {
+    if (!response.body || !response.body.getReader) {
+      var bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > remaining) throw new Error("This collection is too large for a browser ZIP. Download items individually.");
+      return bytes;
+    }
+    var reader = response.body.getReader(), chunks = [], total = 0;
+    try {
+      while (true) {
+        var part = await reader.read();
+        if (part.done) break;
+        total += part.value.byteLength;
+        if (total > remaining) {
+          await reader.cancel();
+          throw new Error("This collection is too large for a browser ZIP. Download items individually.");
+        }
+        chunks.push(part.value);
+      }
+    } finally { reader.releaseLock(); }
+    var result = new Uint8Array(total), offset = 0;
+    chunks.forEach(function (chunk) { result.set(chunk, offset); offset += chunk.byteLength; });
+    return result;
+  }
   async function downloadAll() {
     if (state.zipBusy) return;
     if (state.items.length < 2) { downloadSelected(); return; }
     state.zipBusy = true; $("downloadAll").disabled = true; $("downloadProgress").hidden = false;
-    var files = [], totalSize = 0, maxSize = 220 * 1024 * 1024;
+    var files = [], totalSize = 0;
+    var maxSize = (navigator.deviceMemory && navigator.deviceMemory <= 4 ? 100 : 220) * 1024 * 1024;
     try {
       for (var i = 0; i < state.items.length; i++) {
         $("downloadProgress").textContent = "Preparing file " + (i + 1) + " of " + state.items.length + "...";
@@ -318,7 +344,7 @@
         if (!res.ok) throw new Error("A file could not be retrieved (" + res.status + "). Try individual downloads.");
         var declaredSize = Number(res.headers.get("content-length") || "0");
         if (totalSize + declaredSize > maxSize) throw new Error("This carousel is too large for a browser ZIP. Download items individually.");
-        var bytes = new Uint8Array(await res.arrayBuffer());
+        var bytes = await readLimitedMedia(res, maxSize - totalSize);
         totalSize += bytes.byteLength;
         if (totalSize > maxSize) throw new Error("This carousel is too large for a browser ZIP. Download items individually.");
         files.push({ name: filename(item, i), bytes: bytes });
@@ -328,7 +354,10 @@
       var name = "AirInsta_" + (id ? id[1].replace(/[^a-z0-9_-]/gi, "") : "collection") + ".zip";
       triggerDownload(URL.createObjectURL(blob), name, true);
       toast("Your ZIP is ready!");
-    } catch (e) { error(e.message || "Unable to package this collection."); }
+    } catch (e) {
+      var message = e.message || "Unable to package this collection.";
+      error(message); toast(message);
+    }
     finally { state.zipBusy = false; $("downloadAll").disabled = false; $("downloadProgress").hidden = true; }
   }
   function saveHistory(entry) {
@@ -421,6 +450,14 @@
     state.captionOpen = !state.captionOpen;
     $("postCaption").classList.toggle("expanded", state.captionOpen);
     $("captionExpand").textContent = state.captionOpen ? "Show less" : "Show more";
+    $("captionExpand").setAttribute("aria-expanded", String(state.captionOpen));
+  });
+  $("copyCaption").addEventListener("click", async function () {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(state.meta.caption);
+      toast("Caption copied!");
+    } catch (_) { toast("Select and copy the caption manually."); }
   });
   $("shareBtn").addEventListener("click", async function () {
     if (!state.url) return;

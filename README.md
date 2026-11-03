@@ -11,7 +11,7 @@
 - Navigate carousel slides with thumbnail previews and previous/next buttons.
 - Download one photo or video directly, or **download all carousel media together as a ZIP**.
 - Display creator handle, caption, media type and item count when the extractor provides them.
-- Quickly paste links, open original posts and share links.
+- Quickly paste links, open original posts, share links and copy captions.
 - Save favorite links and recent links **locally in the device's browser**.
 - Responsive dark/light UI with an Instagram-inspired aesthetic.
 - Install as an Android/desktop Progressive Web App (PWA), including an offline application shell.
@@ -74,7 +74,7 @@ The app treats metadata separately from media items and uses the actual number o
 - AirInsta is **not an Instagram client** and does not reproduce Instagram's authenticated feed, DMs, followers, likes or account content. Those features need official Instagram APIs, appropriate permissions and an account login flow.
 - Only **public content supported by your existing Cloudflare extractor** can be resolved; private, close-friends or login-restricted content is not bypassed.
 - Signed Instagram CDN URLs expire. Resolve the link again if playback or download fails.
-- The ZIP feature is designed for normal carousel posts. For exceptionally large collections (over 220 MB), download files separately to avoid excessive browser memory use.
+- The ZIP feature is designed for normal carousel posts. Collections over 220 MB (or 100 MB on detected low-memory devices) need to be downloaded individually.
 - The app does not store media on a server. Links saved by the user are kept in the local browser; clearing site data removes them.
 - Some browsers restrict the Clipboard API or PWA installation. Manual paste and the website remain available.
 - Vercel function limits may affect extremely large or very slow media streams. Video playback tries the CDN first and falls back to a same-origin proxy.
