@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 "$ANDROID_HOME/emulator/emulator" -avd airinsta_smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > /tmp/airinsta-emulator.log 2>&1 &
 adb wait-for-device
