@@ -3,7 +3,10 @@ set -euo pipefail
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 
 "$ANDROID_HOME/emulator/emulator" -avd airinsta_smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > /tmp/airinsta-emulator.log 2>&1 &
-adb wait-for-device
+if ! timeout 180 adb wait-for-device; then
+  cat /tmp/airinsta-emulator.log
+  exit 1
+fi
 timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == "1" ]]; do sleep 3; done'
 adb shell input keyevent 82
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
