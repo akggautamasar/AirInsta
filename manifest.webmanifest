@@ -1,0 +1,23 @@
+{
+  "id": "/",
+  "name": "AirInsta — Instagram Media Studio",
+  "short_name": "AirInsta",
+  "description": "Play, preview and download public Instagram posts and reels.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0a12",
+  "theme_color": "#100e18",
+  "icons": [
+    {
+      "src": "/icon-192.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": [
+    "entertainment",
+    "utilities"
+  ]
+}
