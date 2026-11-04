@@ -2,7 +2,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, codex/airinsta-improvements]
+    branches: [main, codex/airinsta-improvements, codex/airinsta-release-1-1]
     paths:
       - 'android/**'
       - '.github/workflows/android.yml'
@@ -25,10 +25,23 @@ jobs:
           gradle-version: '8.10.2'
       - name: Build the native Android app
         working-directory: android
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon --stacktrace :app:assembleDebug :app:assembleRelease :app:lintRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: AirInsta-Android-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: AirInsta-Android-builds
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 30
+      - name: Prepare public Android signing tools
+        run: |
+          mkdir -p android-signing-tools/lib64
+          cp "$ANDROID_HOME/build-tools/35.0.0/lib/apksigner.jar" android-signing-tools/
+          cp "$ANDROID_HOME/build-tools/35.0.0/zipalign" android-signing-tools/
+          if [ -d "$ANDROID_HOME/build-tools/35.0.0/lib64" ]; then cp -r "$ANDROID_HOME/build-tools/35.0.0/lib64/." android-signing-tools/lib64/; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android-signing-tools
+          path: android-signing-tools/
+          retention-days: 7

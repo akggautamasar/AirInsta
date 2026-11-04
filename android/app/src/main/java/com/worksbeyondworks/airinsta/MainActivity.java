@@ -1,478 +1,508 @@
 package com.worksbeyondworks.airinsta;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
-import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.MediaController;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
-import org.json.JSONArray;
 import org.json.JSONObject;
-import org.json.JSONTokener;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URI;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.Future;
 
-/** A native Android UI. The website is not loaded in a WebView. */
 public final class MainActivity extends Activity {
-    private static final String API = "https://airinsta.vercel.app";
-    private static final int BG = Color.rgb(17, 13, 25);
-    private static final int PANEL = Color.rgb(36, 27, 44);
-    private static final int TEXT = Color.rgb(251, 240, 248);
-    private static final int MUTED = Color.rgb(188, 171, 190);
-    private static final int PINK = Color.rgb(250, 139, 185);
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
-    private final ArrayList<Media> media = new ArrayList<>();
-    private EditText input;
-    private Button fetchButton, previous, next, downloadAll, fullScreen;
-    private LinearLayout result;
+    private final ExecutorService io = Executors.newFixedThreadPool(3);
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Map<Long, DownloadRow> downloadRows = new HashMap<>();
+    private Ui ui;
+    private LocalStore store;
+    private DownloadManager downloads;
+    private MediaApi.Post post;
+    private int active, tab, generation;
+    private String libraryMode = "saved";
+    private boolean busy;
+    private Future<?> resolveJob;
+    private EditText input, search;
+    private Button fetchButton, cancelButton, saveButton;
+    private Button[] tabs;
+    private ScrollView[] pages;
+    private LinearLayout studioRoot, libraryRoot, downloadsRoot, result, libraryList, downloadsList;
     private FrameLayout stage;
-    private TextView status, creator, caption, position;
+    private TextView status, creator, caption, position, detail, hint;
     private VideoView video;
-    private String link = "", username = "", postCaption = "";
-    private int active = 0, generation = 0;
-
-    static final class Media {
-        final String url;
-        final boolean video;
-        Media(String url, boolean video) { this.url = url; this.video = video; }
-    }
+    private Button previous, next, downloadAll, fullScreen;
+    private final Runnable poll = new Runnable() {
+        @Override public void run() {
+            if (tab == 2) refreshDownloads();
+            handler.postDelayed(this, 1500);
+        }
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        store = new LocalStore(this);
+        downloads = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+        if (state != null) {
+            tab = state.getInt("tab"); active = state.getInt("active");
+            try { post = MediaApi.Post.restore(state.getString("post", "")); } catch (Exception ignored) { }
+        }
         buildUi();
         if (state != null) input.setText(state.getString("input", ""));
         else acceptShare(getIntent());
     }
-
     @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        acceptShare(intent);
+        super.onNewIntent(intent); setIntent(intent); acceptShare(intent);
     }
-
     @Override protected void onSaveInstanceState(Bundle out) {
-        out.putString("input", input.getText().toString());
+        out.putString("input", input.getText().toString()); out.putInt("tab", tab); out.putInt("active", active);
+        if (post != null) {
+            try {
+                String value = post.json().toString();
+                if (value.length() < 180000) out.putString("post", value);
+            } catch (Exception ignored) { }
+        }
         super.onSaveInstanceState(out);
     }
-
+    @Override protected void onResume() { super.onResume(); handler.post(poll); }
+    @Override protected void onPause() {
+        handler.removeCallbacks(poll);
+        if (video != null && video.isPlaying()) video.pause();
+        super.onPause();
+    }
     @Override protected void onDestroy() {
-        generation++;
-        if (video != null) video.stopPlayback();
-        io.shutdownNow();
-        super.onDestroy();
+        generation++; handler.removeCallbacksAndMessages(null); stopInline(); io.shutdownNow(); super.onDestroy();
     }
 
-    private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    private GradientDrawable rounded(int color, float radius) {
-        GradientDrawable shape = new GradientDrawable();
-        shape.setColor(color);
-        shape.setCornerRadius(dp(radius));
-        return shape;
-    }
-    private TextView text(String value, int size, int color, boolean bold) {
-        TextView view = new TextView(this);
-        view.setText(value); view.setTextColor(color); view.setTextSize(size);
-        if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        return view;
-    }
-    private Button button(String label, boolean primary) {
-        Button b = new Button(this);
-        b.setText(label); b.setAllCaps(false); b.setTextSize(14);
-        b.setTextColor(primary ? BG : TEXT);
-        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        b.setBackground(rounded(primary ? PINK : Color.rgb(69, 48, 69), 13));
-        b.setMinHeight(dp(48)); b.setPadding(dp(12), 0, dp(12), 0);
-        return b;
-    }
-    private void add(LinearLayout parent, View view, int top) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(top); parent.addView(view, params);
-    }
-    private LinearLayout column() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        return layout;
-    }
-    private LinearLayout row() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.HORIZONTAL);
-        layout.setGravity(Gravity.CENTER_VERTICAL);
-        return layout;
-    }
-    private void addWeighted(LinearLayout row, View child, int left) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), 1);
-        p.leftMargin = dp(left); row.addView(child, p);
+    private ScrollView page(LinearLayout content) {
+        ScrollView out = new ScrollView(this); out.setFillViewport(true);
+        content.setPadding(ui.dp(18), ui.dp(16), ui.dp(18), ui.dp(24));
+        out.addView(content); return out;
     }
     private void buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true); scroll.setBackgroundColor(BG);
-        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+        stopInline();
+        ui = new Ui(this, store.flag("light"));
+        LinearLayout root = ui.column(); root.setBackgroundColor(ui.bg);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
             v.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
             return insets;
         });
-        LinearLayout root = column();
-        root.setPadding(dp(20), dp(20), dp(20), dp(28));
-        scroll.addView(root); setContentView(scroll);
-
-        TextView brand = text("airinsta  ✦", 27, PINK, true);
-        add(root, brand, 0);
-        TextView badge = text("YOUR NATIVE MEDIA STUDIO", 10, PINK, true);
-        badge.setLetterSpacing(.13f); add(root, badge, 25);
-        TextView title = text("Save the moments.\nKeep the magic.", 30, TEXT, true);
-        title.setLineSpacing(dp(2), 1f); add(root, title, 10);
-        TextView intro = text("Paste or share a public Instagram link to preview and save the media.", 14, MUTED, false);
-        intro.setLineSpacing(dp(3), 1f); add(root, intro, 10);
-
-        LinearLayout form = column();
-        form.setPadding(dp(16), dp(16), dp(16), dp(16)); form.setBackground(rounded(PANEL, 20));
-        add(root, form, 22);
-        add(form, text("INSTAGRAM POST URL", 11, PINK, true), 0);
-        input = new EditText(this);
-        input.setSingleLine(false); input.setMaxLines(3);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        input.setTextSize(14); input.setTextColor(TEXT); input.setHintTextColor(MUTED);
+        LinearLayout header = ui.row(); header.setPadding(ui.dp(20), ui.dp(10), ui.dp(20), ui.dp(10));
+        TextView brand = ui.text("airinsta  ✦", 25, ui.accent, true);
+        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        Button theme = ui.button(ui.light ? "Dark" : "Light", false);
+        theme.setContentDescription("Change appearance");
+        header.addView(theme, new LinearLayout.LayoutParams(ui.dp(74), ui.dp(42)));
+        theme.setOnClickListener(v -> {
+            String draft = input.getText().toString();
+            store.flag("light", !ui.light); buildUi(); input.setText(draft);
+        });
+        root.addView(header);
+        FrameLayout content = new FrameLayout(this);
+        root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
+        studioRoot = ui.column(); libraryRoot = ui.column(); downloadsRoot = ui.column();
+        pages = new ScrollView[]{page(studioRoot), page(libraryRoot), page(downloadsRoot)};
+        for (ScrollView page : pages) content.addView(page, new FrameLayout.LayoutParams(-1, -1));
+        buildStudio(); buildLibrary(); buildDownloads();
+        LinearLayout navigation = ui.row();
+        navigation.setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(10));
+        navigation.setBackgroundColor(ui.panel);
+        tabs = new Button[3];
+        String[] labels = {"Studio", "Library", "Downloads"};
+        for (int i=0;i<3;i++) {
+            final int target=i; tabs[i]=ui.button(labels[i], false);
+            tabs[i].setContentDescription(labels[i] + " tab");
+            ui.weight(navigation,tabs[i],i==0?0:8);
+            tabs[i].setOnClickListener(v -> selectTab(target));
+        }
+        root.addView(navigation); setContentView(root);
+        if (post != null && !post.items.isEmpty()) { input.setText(post.source); renderResult(); }
+        if (busy) { setBusy(true); status.setText("Finding your media…"); }
+        selectTab(tab);
+    }
+    private void buildStudio() {
+        TextView eyebrow = ui.text("YOUR POCKET MEDIA STUDIO", 10, ui.accent, true);
+        eyebrow.setLetterSpacing(.12f); ui.add(studioRoot,eyebrow,0);
+        ui.add(studioRoot,ui.text("Find it. Watch it.\nKeep it.",30,ui.text,true),9);
+        ui.add(studioRoot,ui.text("Share a public Instagram link or paste it below.",14,ui.muted,false),7);
+        LinearLayout form=ui.card();ui.add(studioRoot,form,20);
+        ui.add(form,ui.text("INSTAGRAM POST URL",10,ui.accent,true),0);
+        input=new EditText(this);input.setSingleLine(false);input.setMaxLines(3);
+        input.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
+        input.setTextSize(14);input.setTextColor(ui.text);input.setHintTextColor(ui.muted);
         input.setHint("https://www.instagram.com/reel/...");
-        input.setPadding(dp(12), dp(12), dp(12), dp(12));
-        input.setBackground(rounded(Color.rgb(24, 18, 31), 12)); add(form, input, 10);
-        LinearLayout inputActions = row(); add(form, inputActions, 12);
-        Button paste = button("Paste link", false);
-        Button recent = button("Last link", false);
-        addWeighted(inputActions, paste, 0); addWeighted(inputActions, recent, 8);
-        paste.setOnClickListener(v -> {
-            ClipboardManager cb = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            ClipData clip = cb.getPrimaryClip();
-            if (clip != null && clip.getItemCount() > 0) {
-                CharSequence value = clip.getItemAt(0).coerceToText(this);
-                input.setText(value == null ? "" : value.toString());
-            } else message("Copy an Instagram link first.");
+        input.setContentDescription("Instagram post URL");
+        input.setPadding(ui.dp(12),ui.dp(12),ui.dp(12),ui.dp(12));input.setBackground(ui.shape(ui.field,12));
+        ui.add(form,input,10);
+        LinearLayout actions=ui.row();ui.add(form,actions,12);
+        Button paste=ui.button("Paste link",false), clear=ui.button("Clear",false);
+        ui.weight(actions,paste,0);ui.weight(actions,clear,8);
+        paste.setOnClickListener(v -> paste());
+        clear.setOnClickListener(v -> {input.setText("");input.requestFocus();});
+        fetchButton=ui.button("Get media  →",true);ui.add(form,fetchButton,10);
+        fetchButton.setOnClickListener(v -> resolve(input.getText().toString()));
+        cancelButton=ui.button("Cancel request",false);ui.add(form,cancelButton,8);cancelButton.setVisibility(View.GONE);
+        cancelButton.setOnClickListener(v -> {
+            generation++;if(resolveJob!=null)resolveJob.cancel(true);setBusy(false);status.setText("Request canceled.");
         });
-        recent.setOnClickListener(v -> {
-            String value = getPreferences(MODE_PRIVATE).getString("last_link", "");
-            if (value.isEmpty()) message("No recent link yet."); else input.setText(value);
+        status=ui.text("",13,ui.accent,false);status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        ui.add(form,status,8);
+        result=ui.card();result.setVisibility(View.GONE);ui.add(studioRoot,result,20);
+        creator=ui.text("",18,ui.text,true);ui.add(result,creator,0);
+        detail=ui.text("",11,ui.muted,false);ui.add(result,detail,5);
+        stage=new FrameLayout(this);stage.setBackground(ui.shape(Color.BLACK,12));stage.setClipToOutline(true);
+        LinearLayout.LayoutParams stageParams=new LinearLayout.LayoutParams(-1,ui.dp(300));stageParams.topMargin=ui.dp(14);result.addView(stage,stageParams);
+        hint=ui.text("Full frame preview",11,ui.muted,false);hint.setGravity(Gravity.CENTER);ui.add(result,hint,8);
+        LinearLayout nav=ui.row();ui.add(result,nav,10);
+        position=ui.text("",13,ui.muted,true);nav.addView(position,new LinearLayout.LayoutParams(0,ui.dp(46),1));
+        previous=ui.button("‹",false);next=ui.button("›",false);
+        previous.setContentDescription("Previous media");next.setContentDescription("Next media");
+        nav.addView(previous,new LinearLayout.LayoutParams(ui.dp(50),ui.dp(46)));
+        LinearLayout.LayoutParams n=new LinearLayout.LayoutParams(ui.dp(50),ui.dp(46));n.leftMargin=ui.dp(8);nav.addView(next,n);
+        previous.setOnClickListener(v -> showMedia(active-1));next.setOnClickListener(v -> showMedia(active+1));
+        fullScreen=ui.button("Watch fullscreen",false);ui.add(result,fullScreen,8);
+        fullScreen.setOnClickListener(v -> openMedia());
+        LinearLayout tools=ui.row();ui.add(result,tools,10);
+        saveButton=ui.button("Save link",false);Button share=ui.button("Share link",false);
+        ui.weight(tools,saveButton,0);ui.weight(tools,share,8);
+        saveButton.setOnClickListener(v -> {
+            if(post==null)return;store.toggleSaved(post);updateSave();message(store.saved(post.source)?"Link saved":"Link removed from saved");
         });
-        fetchButton = button("Get media  →", true); add(form, fetchButton, 10);
-        fetchButton.setOnClickListener(v -> resolve());
-        status = text("", 13, PINK, false); status.setLineSpacing(dp(3), 1f); add(form, status, 10);
-
-        result = column(); result.setPadding(dp(16), dp(16), dp(16), dp(16));
-        result.setBackground(rounded(PANEL, 20)); result.setVisibility(View.GONE); add(root, result, 22);
-        creator = text("Your media is ready ✦", 18, TEXT, true); add(result, creator, 0);
-        stage = new FrameLayout(this); stage.setBackground(rounded(Color.BLACK, 12));
-        stage.setClipToOutline(true);
-        LinearLayout.LayoutParams stageParams = new LinearLayout.LayoutParams(-1, dp(300));
-        stageParams.topMargin = dp(14); result.addView(stage, stageParams);
-        TextView hint = text("Full frame preview · Tap play for video controls", 11, MUTED, false);
-        hint.setGravity(Gravity.CENTER); add(result, hint, 9);
-        LinearLayout navigation = row(); add(result, navigation, 10);
-        position = text("1 of 1", 13, MUTED, true);
-        navigation.addView(position, new LinearLayout.LayoutParams(0, dp(48), 1));
-        previous = button("‹", false); next = button("›", false);
-        LinearLayout.LayoutParams arrow = new LinearLayout.LayoutParams(dp(52), dp(48));
-        navigation.addView(previous, arrow);
-        LinearLayout.LayoutParams arrow2 = new LinearLayout.LayoutParams(dp(52), dp(48)); arrow2.leftMargin = dp(8);
-        navigation.addView(next, arrow2);
-        previous.setOnClickListener(v -> showMedia(active - 1));
-        next.setOnClickListener(v -> showMedia(active + 1));
-        fullScreen = button("Watch fullscreen", false); add(result, fullScreen, 8);
-        fullScreen.setOnClickListener(v -> {
-            if (media.isEmpty() || !media.get(active).video) return;
-            Intent open = new Intent(this, FullscreenActivity.class);
-            open.putExtra("url", media.get(active).url);
-            open.putExtra("proxy", proxy(media.get(active).url, false, ""));
-            startActivity(open);
+        share.setOnClickListener(v -> {if(post!=null)shareText(post.source);});
+        caption=ui.text("",13,ui.muted,false);caption.setTextIsSelectable(true);caption.setMaxLines(5);ui.add(result,caption,15);
+        LinearLayout captionActions=ui.row();ui.add(result,captionActions,8);
+        Button expand=ui.button("Expand caption",false),copy=ui.button("Copy caption",false);
+        ui.weight(captionActions,expand,0);ui.weight(captionActions,copy,8);
+        expand.setOnClickListener(v -> {
+            boolean expanded=caption.getMaxLines()==Integer.MAX_VALUE;
+            caption.setMaxLines(expanded?5:Integer.MAX_VALUE);expand.setText(expanded?"Expand caption":"Collapse caption");
         });
-        caption = text("", 13, MUTED, false); caption.setLineSpacing(dp(3), 1f); add(result, caption, 15);
-        Button download = button("Download this item ↓", true); add(result, download, 16);
-        download.setOnClickListener(v -> download(active));
-        downloadAll = button("Download all items", false); add(result, downloadAll, 8);
+        copy.setOnClickListener(v -> {
+            if(post==null||post.caption.isEmpty()){message("No caption provided");return;}
+            ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Instagram caption",post.caption));
+            message("Caption copied");
+        });
+        Button download=ui.button("Download this item ↓",true);ui.add(result,download,14);
+        download.setOnClickListener(v -> {if(post!=null)enqueue(post,active);});
+        downloadAll=ui.button("Download all items",false);ui.add(result,downloadAll,8);
         downloadAll.setOnClickListener(v -> {
-            for (int i = 0; i < media.size(); i++) download(i);
+            if(post==null)return;int added=0;
+            for(int i=0;i<post.items.size();i++)if(enqueueInternal(post,i))added++;
+            message(added+" item"+(added==1?"":"s")+" queued");
         });
-        Button original = button("Open original on Instagram ↗", false); add(result, original, 8);
+        Button original=ui.button("Open on Instagram ↗",false);ui.add(result,original,8);
         original.setOnClickListener(v -> {
-            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(link))); }
-            catch (Exception e) { message("No app is available to open this link."); }
+            if(post==null)return;
+            try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(post.source)));}catch(Exception e){message("No app is available to open the link");}
         });
-        TextView note = text("Download only content you own or have permission to save. Public links supported by the extractor work here.", 11, MUTED, false);
-        note.setLineSpacing(dp(3), 1f); add(root, note, 20);
+        ui.add(studioRoot,ui.text("Public links supported by the extractor. Save media you own or have permission to keep.",11,ui.muted,false),20);
+        ui.add(studioRoot,ui.text("AirInsta 1.1.0 · WorksBeyondWorks",10,ui.muted,false),12);
     }
-
+    private void buildLibrary() {
+        ui.add(libraryRoot,ui.text("Your collection.",28,ui.text,true),0);
+        ui.add(libraryRoot,ui.text("Saved and recent links stay on this device.",13,ui.muted,false),7);
+        LinearLayout toggle=ui.row();ui.add(libraryRoot,toggle,18);
+        Button saved=ui.button("Saved links",false),recent=ui.button("Recent links",false);
+        ui.weight(toggle,saved,0);ui.weight(toggle,recent,8);
+        saved.setOnClickListener(v -> {libraryMode="saved";renderLibrary();});
+        recent.setOnClickListener(v -> {libraryMode="recent";renderLibrary();});
+        search=new EditText(this);search.setSingleLine(true);search.setTextSize(14);
+        search.setTextColor(ui.text);search.setHintTextColor(ui.muted);search.setHint("Search creator, caption or link");
+        search.setContentDescription("Search library");search.setBackground(ui.shape(ui.field,12));
+        search.setPadding(ui.dp(12),ui.dp(10),ui.dp(12),ui.dp(10));ui.add(libraryRoot,search,12);
+        search.addTextChangedListener(new TextWatcher(){
+            public void beforeTextChanged(CharSequence s,int st,int c,int a){}
+            public void onTextChanged(CharSequence s,int st,int before,int c){renderLibrary();}
+            public void afterTextChanged(Editable e){}
+        });
+        libraryList=ui.column();ui.add(libraryRoot,libraryList,12);
+    }
+    private void renderLibrary() {
+        if(libraryList==null)return;libraryList.removeAllViews();
+        String filter=search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        ArrayList<JSONObject> items=store.list(libraryMode);int shown=0;
+        ui.add(libraryList,ui.text((libraryMode.equals("saved")?"SAVED":"RECENT")+" · "+items.size()+" links",11,ui.accent,true),0);
+        for(JSONObject entry:items){
+            if(!filter.isEmpty()&&!entry.toString().toLowerCase(Locale.ROOT).contains(filter))continue;
+            shown++;
+            LinearLayout card=ui.card();ui.add(libraryList,card,12);
+            String user=entry.optString("username");
+            ui.add(card,ui.text(user.isEmpty()?"Instagram post":"@"+user.replaceFirst("^@",""),16,ui.text,true),0);
+            TextView link=ui.text(entry.optString("source"),11,ui.muted,false);link.setMaxLines(2);ui.add(card,link,5);
+            TextView snippet=ui.text(entry.optString("caption"),12,ui.muted,false);snippet.setMaxLines(2);ui.add(card,snippet,8);
+            LinearLayout actions=ui.row();ui.add(card,actions,12);
+            Button open=ui.button("Open",true),remove=ui.button("Remove",false);
+            ui.weight(actions,open,0);ui.weight(actions,remove,8);
+            open.setOnClickListener(v -> resolve(entry.optString("source")));
+            remove.setOnClickListener(v -> {store.remove(libraryMode,entry);renderLibrary();updateSave();});
+        }
+        if(shown==0)ui.add(libraryList,ui.text(filter.isEmpty()?"Your next discovery starts in Studio.":"No matching links.",15,ui.muted,false),24);
+        if(libraryMode.equals("recent")&&!items.isEmpty()){
+            Button clear=ui.button("Clear recent links",false);ui.add(libraryList,clear,20);
+            clear.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Clear recent links?")
+                .setMessage("Saved links and downloaded files are kept.")
+                .setNegativeButton("Keep",null).setPositiveButton("Clear",(d,w)->{store.write("recent",new ArrayList<>());renderLibrary();}).show());
+        }
+    }
+    private void buildDownloads() {
+        ui.add(downloadsRoot,ui.text("Ready to keep.",28,ui.text,true),0);
+        ui.add(downloadsRoot,ui.text("Track downloads, then open or share your files.",13,ui.muted,false),7);
+        LinearLayout settings=ui.card();ui.add(downloadsRoot,settings,18);
+        CheckBox wifi=new CheckBox(this);wifi.setText("Wi-Fi only for new downloads");wifi.setTextColor(ui.text);wifi.setChecked(store.flag("wifi"));
+        ui.add(settings,wifi,0);wifi.setOnCheckedChangeListener((b,value)->store.flag("wifi",value));
+        ui.add(settings,ui.text("Files are saved in Downloads / AirInsta. Android continues queued downloads in the background.",11,ui.muted,false),6);
+        downloadsList=ui.column();ui.add(downloadsRoot,downloadsList,12);
+    }
+    private void selectTab(int selected) {
+        tab=Math.max(0,Math.min(2,selected));
+        for(int i=0;i<pages.length;i++){pages[i].setVisibility(i==tab?View.VISIBLE:View.GONE);tabs[i].setTextColor(i==tab?ui.accent:ui.muted);}
+        if(tab!=0&&video!=null&&video.isPlaying())video.pause();
+        if(tab==1)renderLibrary();if(tab==2)renderDownloads();
+    }
+    private void paste() {
+        ClipboardManager cb=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+        ClipData clip=cb.getPrimaryClip();
+        if(clip!=null&&clip.getItemCount()>0){
+            CharSequence text=clip.getItemAt(0).coerceToText(this);input.setText(text==null?"":text);
+        }else message("Copy an Instagram link first");
+    }
     private void acceptShare(Intent intent) {
-        if (intent != null && Intent.ACTION_SEND.equals(intent.getAction())) {
-            String shared = intent.getStringExtra(Intent.EXTRA_TEXT);
-            if (shared != null && !shared.trim().isEmpty()) { input.setText(shared); resolve(); }
+        if(intent!=null&&Intent.ACTION_SEND.equals(intent.getAction())){
+            String value=intent.getStringExtra(Intent.EXTRA_TEXT);
+            if(value!=null&&!value.trim().isEmpty())resolve(value);
         }
     }
-
-    private String validLink(String raw) throws Exception {
-        String candidate = raw == null ? "" : raw.trim();
-        Matcher match = Pattern.compile("https?://[^\\s]+", Pattern.CASE_INSENSITIVE).matcher(candidate);
-        if (match.find()) candidate = match.group();
-        else if (candidate.matches("(?i)^(www\\.)?(instagram\\.com|instagr\\.am)/.*")) candidate = "https://" + candidate;
-        candidate = candidate.replaceAll("[).,]+$", "");
-        if (candidate.length() > 2500) throw new Exception("This link is too long.");
-        URI uri;
-        try { uri = new URI(candidate); } catch (Exception e) { throw new Exception("Paste a valid Instagram reel or post link."); }
-        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
-        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getPort() != -1 || uri.getUserInfo() != null ||
-            !(host.equals("instagram.com") || host.equals("www.instagram.com") || host.equals("m.instagram.com") ||
-              host.equals("instagr.am") || host.equals("www.instagr.am")))
-            throw new Exception("Use a public Instagram link.");
-        String path = uri.getRawPath() == null ? "" : uri.getRawPath();
-        if (!path.matches("(?i)^/(reel|reels|p|tv|stories|share)/[^/]+.*"))
-            throw new Exception("Use a link to a reel, post, carousel or public story.");
-        return "https://www.instagram.com" + path;
+    private void setBusy(boolean value) {
+        busy=value;fetchButton.setEnabled(!value);fetchButton.setText(value?"Finding your media…":"Get media  →");
+        cancelButton.setVisibility(value?View.VISIBLE:View.GONE);
     }
-
-    private void resolve() {
+    private void resolve(String raw) {
         final String requested;
-        try { requested = validLink(input.getText().toString()); }
-        catch (Exception e) { status.setText(e.getMessage()); return; }
-        link = requested; input.setText(requested); fetchButton.setEnabled(false);
-        status.setText("Finding your media…"); result.setVisibility(View.GONE);
-        if (video != null) { video.stopPlayback(); video = null; }
-        ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(), 0);
-        final int request = ++generation;
-        io.execute(() -> {
-            try {
-                byte[] data = readUrl(API + "/api/resolve?url=" + Uri.encode(requested), 4 * 1024 * 1024);
-                Object json = new JSONTokener(new String(data, StandardCharsets.UTF_8)).nextValue();
-                ArrayList<Media> found = new ArrayList<>();
-                String[] metadata = new String[] {"", ""};
-                collect(json, found, new HashSet<>(), metadata, 0);
-                if (found.isEmpty()) throw new Exception("No media was returned. The post may be private, expired or unsupported.");
-                runOnUiThread(() -> {
-                    if (request != generation || isFinishing()) return;
-                    media.clear(); media.addAll(found); username = metadata[0]; postCaption = metadata[1];
-                    getPreferences(MODE_PRIVATE).edit().putString("last_link", requested).apply();
-                    creator.setText(username.isEmpty() ? "Your media is ready ✦" : "@" + username.replaceFirst("^@", ""));
-                    caption.setText(postCaption.isEmpty() ? "No caption provided." : postCaption);
-                    result.setVisibility(View.VISIBLE); status.setText("Link resolved ✓");
-                    fetchButton.setEnabled(true); showMedia(0);
-                    result.post(() -> result.requestFocus());
+        try{requested=MediaApi.normalize(raw);}catch(Exception e){selectTab(0);status.setText(e.getMessage());return;}
+        if(resolveJob!=null)resolveJob.cancel(true);
+        selectTab(0);input.setText(requested);setBusy(true);status.setText("Finding your media…");result.setVisibility(View.GONE);stopInline();
+        ((InputMethodManager)getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(input.getWindowToken(),0);
+        final int request=++generation;
+        resolveJob=io.submit(()->{
+            try{
+                MediaApi.Post resolved=MediaApi.resolve(requested);
+                runOnUiThread(()->{
+                    if(request!=generation||isFinishing())return;
+                    post=resolved;active=0;store.recent(post);setBusy(false);status.setText("Link resolved ✓");renderResult();
+                    if(tab==0)result.post(()->pages[0].smoothScrollTo(0,result.getTop()-ui.dp(12)));
                 });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (request != generation || isFinishing()) return;
-                    fetchButton.setEnabled(true);
-                    status.setText(e.getMessage() == null ? "Unable to resolve this link. Please retry." : e.getMessage());
-                });
-            }
+            }catch(Exception e){runOnUiThread(()->{
+                if(request!=generation||isFinishing())return;setBusy(false);
+                status.setText(e.getMessage()==null?"Unable to resolve this link. Try again.":e.getMessage());
+            });}
         });
     }
-
-    private static byte[] readUrl(String address, int limit) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
-        connection.setConnectTimeout(15000); connection.setReadTimeout(30000);
-        connection.setRequestProperty("User-Agent", "AirInsta-Android/1.0");
-        try {
-            int code = connection.getResponseCode();
-            if (code < 200 || code >= 300) {
-                String error = "The media service could not complete this request. Try again.";
-                InputStream stream = connection.getErrorStream();
-                if (stream != null) {
-                    try { error = new JSONObject(new String(readStream(stream, 16384), StandardCharsets.UTF_8)).optString("message", error); }
-                    catch (Exception ignored) { }
-                }
-                throw new Exception(error);
-            }
-            return readStream(connection.getInputStream(), limit);
-        } finally { connection.disconnect(); }
+    private void renderResult() {
+        if(post==null||post.items.isEmpty())return;
+        result.setVisibility(View.VISIBLE);creator.setText(post.username.isEmpty()?"Your media is ready ✦":"@"+post.username.replaceFirst("^@",""));
+        detail.setText(post.items.size()+" item"+(post.items.size()==1?"":"s")+" · Public media");
+        caption.setText(post.caption.isEmpty()?"No caption provided.":post.caption);caption.setMaxLines(5);
+        updateSave();showMedia(Math.min(active,post.items.size()-1));
     }
-    private static byte[] readStream(InputStream stream, int limit) throws Exception {
-        try (InputStream in = stream; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[8192]; int n, total = 0;
-            while ((n = in.read(buf)) != -1) {
-                total += n; if (total > limit) throw new Exception("The response is too large.");
-                out.write(buf, 0, n);
-            }
-            return out.toByteArray();
-        }
-    }
-    private static boolean approved(String value) {
-        try {
-            URI uri = new URI(value);
-            String h = uri.getHost().toLowerCase(Locale.ROOT);
-            return "https".equalsIgnoreCase(uri.getScheme()) && uri.getPort() == -1 && uri.getUserInfo() == null &&
-                (h.equals("fbcdn.net") || h.endsWith(".fbcdn.net") ||
-                 h.equals("cdninstagram.com") || h.endsWith(".cdninstagram.com") ||
-                 h.equals("instagram.com") || h.endsWith(".instagram.com"));
-        } catch (Exception e) { return false; }
-    }
-    private static String first(JSONObject obj, String... keys) {
-        for (String key : keys) {
-            Object value = obj.opt(key);
-            if (value instanceof String && ((String) value).startsWith("https://")) return (String) value;
-            if (value instanceof JSONObject) {
-                String nested = ((JSONObject) value).optString("url", "");
-                if (nested.startsWith("https://")) return nested;
-            }
-        }
-        return "";
-    }
-    private static void collect(Object obj, ArrayList<Media> out, Set<String> seen, String[] meta, int depth) {
-        if (obj == null || depth > 9 || out.size() >= 100) return;
-        if (obj instanceof JSONArray) {
-            JSONArray array = (JSONArray) obj;
-            for (int i = 0; i < array.length() && out.size() < 100; i++) collect(array.opt(i), out, seen, meta, depth + 1);
-            return;
-        }
-        if (!(obj instanceof JSONObject)) return;
-        JSONObject node = (JSONObject) obj;
-        if (meta[0].isEmpty()) {
-            meta[0] = node.optString("username", "");
-            JSONObject owner = node.optJSONObject("owner");
-            if (meta[0].isEmpty() && owner != null) meta[0] = owner.optString("username", "");
-        }
-        if (meta[1].isEmpty()) {
-            Object cap = node.opt("caption");
-            if (cap instanceof String) meta[1] = (String) cap;
-            else if (cap instanceof JSONObject) meta[1] = ((JSONObject) cap).optString("text", "");
-        }
-        String vid = first(node, "video_url", "play_url", "videoUrl", "video");
-        JSONArray versions = node.optJSONArray("video_versions");
-        if (vid.isEmpty() && versions != null && versions.optJSONObject(0) != null) vid = first(versions.optJSONObject(0), "url");
-        String image = first(node, "image_url", "display_url", "imageUrl", "display_src", "image");
-        JSONObject imageVersions = node.optJSONObject("image_versions2");
-        if (image.isEmpty() && imageVersions != null) {
-            JSONArray candidates = imageVersions.optJSONArray("candidates");
-            if (candidates != null && candidates.optJSONObject(0) != null) image = first(candidates.optJSONObject(0), "url");
-        }
-        String chosen = !vid.isEmpty() ? vid : image;
-        boolean isVideo = !vid.isEmpty();
-        if (chosen.isEmpty() && !node.has("username") && !node.has("caption")) {
-            chosen = first(node, "download_url", "media_url", "url");
-            isVideo = node.optBoolean("is_video") || chosen.matches("(?i).*\\.mp4(?:\\?.*)?$");
-        }
-        if (approved(chosen) && seen.add(chosen)) out.add(new Media(chosen, isVideo));
-        for (String key : new String[]{"result","data","items","media","medias","carousel_media","resources",
-                "slides","children","nodes","edges","node","edge_sidecar_to_children","edge_sidecar","carousel","attachments"}) {
-            if (node.has(key)) collect(node.opt(key), out, seen, meta, depth + 1);
-        }
-    }
-
-    private static String proxy(String url, boolean download, String name) {
-        return API + "/api/media?url=" + Uri.encode(url) +
-            (download ? "&download=1&filename=" + Uri.encode(name) : "");
-    }
-    private void resizeStage(int width, int height) {
-        if (width <= 0 || height <= 0) return;
-        int availableWidth = getResources().getDisplayMetrics().widthPixels - dp(72);
-        int maxHeight = (int) (getResources().getDisplayMetrics().heightPixels * .62);
-        int newHeight = (int) Math.min(maxHeight, Math.max(dp(120), (double) availableWidth * height / width));
-        LinearLayout.LayoutParams p = (LinearLayout.LayoutParams) stage.getLayoutParams();
-        p.height = newHeight; stage.setLayoutParams(p);
+    private void updateSave(){if(saveButton!=null&&post!=null)saveButton.setText(store.saved(post.source)?"Saved ✓":"Save link");}
+    private void stopInline(){if(video!=null){video.stopPlayback();video=null;}}
+    private void sizeStage(int width,int height) {
+        if(width<=0||height<=0)return;
+        int available=stage.getWidth()>0?stage.getWidth():getResources().getDisplayMetrics().widthPixels-ui.dp(68);
+        int max=(int)(getResources().getDisplayMetrics().heightPixels*.60);
+        LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)stage.getLayoutParams();
+        p.height=(int)Math.min(max,Math.max(ui.dp(120),(double)available*height/width));stage.setLayoutParams(p);
     }
     private void showMedia(int index) {
-        if (media.isEmpty()) return;
-        active = (index + media.size()) % media.size();
-        if (video != null) { video.stopPlayback(); video = null; }
-        stage.removeAllViews();
-        Media item = media.get(active);
-        position.setText((active + 1) + " of " + media.size());
-        previous.setEnabled(media.size() > 1); next.setEnabled(media.size() > 1);
-        downloadAll.setVisibility(media.size() > 1 ? View.VISIBLE : View.GONE);
-        fullScreen.setVisibility(item.video ? View.VISIBLE : View.GONE);
-        if (item.video) {
-            VideoView player = new VideoView(this);
-            video = player;
-            stage.addView(player, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-            MediaController controller = new MediaController(this);
-            controller.setAnchorView(stage); player.setMediaController(controller);
-            player.setOnPreparedListener(mp -> {
-                if (video != player) return;
-                resizeStage(mp.getVideoWidth(), mp.getVideoHeight()); mp.seekTo(1);
-                controller.show(3500);
+        if(post==null||post.items.isEmpty())return;
+        active=(index+post.items.size())%post.items.size();stopInline();stage.removeAllViews();
+        MediaApi.Item item=post.items.get(active);
+        position.setText((active+1)+" of "+post.items.size());
+        previous.setEnabled(post.items.size()>1);next.setEnabled(post.items.size()>1);
+        downloadAll.setVisibility(post.items.size()>1?View.VISIBLE:View.GONE);
+        fullScreen.setText(item.video?"Watch fullscreen":"Open photo viewer");
+        hint.setText(item.video?"Full frame preview · Tap play for video controls":"Tap the image to zoom");
+        if(item.video){
+            VideoView player=new VideoView(this);video=player;
+            stage.addView(player,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+            MediaController controller=new MediaController(this);controller.setAnchorView(stage);player.setMediaController(controller);
+            player.setOnPreparedListener(mp->{
+                if(video!=player)return;sizeStage(mp.getVideoWidth(),mp.getVideoHeight());mp.seekTo(1);
+                detail.setText(post.items.size()+" item"+(post.items.size()==1?"":"s")+" · "+mp.getVideoWidth()+" × "+mp.getVideoHeight()+" · "+Ui.time(mp.getDuration()));
             });
-            final boolean[] retried = {false};
-            player.setOnErrorListener((mp, what, extra) -> {
-                if (video != player) return true;
-                if (!retried[0]) { retried[0] = true; player.setVideoURI(Uri.parse(proxy(item.url, false, ""))); }
-                else message("Video unavailable. Resolve the link again or download the item.");
+            final boolean[] retried={false};
+            player.setOnErrorListener((mp,what,extra)->{
+                if(video!=player)return true;
+                if(!retried[0]){retried[0]=true;player.setVideoURI(Uri.parse(MediaApi.proxy(item.url,false,"")));}
+                else message("Video unavailable. Resolve the link again or download it.");
                 return true;
             });
             player.setVideoURI(Uri.parse(item.url));
-        } else {
-            ImageView image = new ImageView(this); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            stage.addView(image, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
-            int shown = active;
-            io.execute(() -> {
-                try {
-                    byte[] bytes;
-                    try { bytes = readUrl(item.url, 24 * 1024 * 1024); }
-                    catch (Exception first) { bytes = readUrl(proxy(item.url, false, ""), 24 * 1024 * 1024); }
-                    BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-                    BitmapFactory.Options options = new BitmapFactory.Options(); options.inSampleSize = 1;
-                    while (bounds.outWidth / options.inSampleSize > 2048 || bounds.outHeight / options.inSampleSize > 2048) options.inSampleSize *= 2;
-                    Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
-                    if (bitmap == null) throw new Exception();
-                    runOnUiThread(() -> {
-                        if (active != shown || stage.indexOfChild(image) < 0 || isFinishing()) return;
-                        image.setImageBitmap(bitmap); resizeStage(bitmap.getWidth(), bitmap.getHeight());
+        }else{
+            ImageView image=new ImageView(this);image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setContentDescription("Instagram photo "+(active+1));stage.addView(image,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+            image.setOnClickListener(v->openMedia());
+            io.execute(()->{
+                try{
+                    Bitmap bitmap=MediaApi.image(this,item.url);
+                    runOnUiThread(()->{
+                        if(stage.indexOfChild(image)<0||isFinishing())return;
+                        image.setImageBitmap(bitmap);sizeStage(bitmap.getWidth(),bitmap.getHeight());
+                        detail.setText(post.items.size()+" item"+(post.items.size()==1?"":"s")+" · Photo");
                     });
-                } catch (Exception e) {
-                    runOnUiThread(() -> { if (stage.indexOfChild(image) >= 0) message("Preview unavailable. Try downloading the item."); });
-                }
+                }catch(Exception e){runOnUiThread(()->{if(stage.indexOfChild(image)>=0)message("Preview unavailable. Try downloading this item.");});}
             });
         }
     }
-    private void download(int index) {
-        if (index < 0 || index >= media.size()) return;
-        Media item = media.get(index);
-        String handle = username.replaceAll("[^A-Za-z0-9_-]", "");
-        if (handle.isEmpty()) handle = "instagram";
-        if (handle.length() > 24) handle = handle.substring(0, 24);
-        String extension = item.video ? ".mp4" : ".jpg";
-        try {
-            String path = new URI(item.url).getPath().toLowerCase(Locale.ROOT);
-            if (path.endsWith(".png")) extension = ".png";
-            else if (path.endsWith(".webp")) extension = ".webp";
-            else if (path.endsWith(".jpeg")) extension = ".jpeg";
-        } catch (Exception ignored) { }
-        String name = "AirInsta_" + handle + "_" + System.currentTimeMillis() + "_" + (index + 1) + extension;
-        try {
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(proxy(item.url, true, name)));
-            request.setTitle(name); request.setDescription("AirInsta media");
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "AirInsta/" + name);
-            ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(request);
-            message("Download started. Check Downloads / AirInsta.");
-        } catch (Exception e) { message("Couldn't start the download. Please try again."); }
+    private void openMedia(){
+        if(post==null||post.items.isEmpty())return;
+        MediaApi.Item item=post.items.get(active);
+        Intent intent=new Intent(this,item.video?FullscreenActivity.class:ImageActivity.class);
+        intent.putExtra("url",item.url);intent.putExtra("title",post.username.isEmpty()?"AirInsta":"@"+post.username);
+        if(item.video){intent.putExtra("proxy",MediaApi.proxy(item.url,false,""));intent.putExtra("position",video==null?0:video.getCurrentPosition());if(video!=null)video.pause();}
+        startActivity(intent);
     }
-    private void message(String text) { Toast.makeText(this, text, Toast.LENGTH_SHORT).show(); }
+    private void shareText(String value){
+        Intent share=new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,value);
+        startActivity(Intent.createChooser(share,"Share Instagram link"));
+    }
+    private void enqueue(MediaApi.Post source,int index){if(enqueueInternal(source,index))message("Download queued · See Downloads");else message("This item is already downloading");}
+    private boolean enqueueInternal(MediaApi.Post source,int index){
+        if(index<0||index>=source.items.size())return false;
+        for(JSONObject old:store.list("downloads")){
+            if(source.source.equals(old.optString("source"))&&old.optInt("index")==index){
+                int state=query(old.optLong("id")).state;
+                if(state==DownloadManager.STATUS_PENDING||state==DownloadManager.STATUS_RUNNING||state==DownloadManager.STATUS_PAUSED)return false;
+            }
+        }
+        String name=MediaApi.filename(source,index);
+        try{
+            DownloadManager.Request request=new DownloadManager.Request(Uri.parse(MediaApi.proxy(source.items.get(index).url,true,name)));
+            request.setTitle(name);request.setDescription("AirInsta media");
+            request.setMimeType(mime(name,source.items.get(index).video));
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setAllowedOverRoaming(false);
+            if(store.flag("wifi")){request.setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI);request.setAllowedOverMetered(false);}
+            request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS,"AirInsta/"+name);
+            long id=downloads.enqueue(request);store.addDownload(id,name,source,index);return true;
+        }catch(Exception e){message("Unable to queue this download");return false;}
+    }
+    private static String mime(String name,boolean video){
+        if(video)return name.endsWith(".mov")?"video/quicktime":"video/mp4";
+        if(name.endsWith(".png"))return "image/png";if(name.endsWith(".webp"))return "image/webp";return "image/jpeg";
+    }
+    private static final class DownloadState{int state;long done,total;String message="Canceled or removed";}
+    private DownloadState query(long id){
+        DownloadState out=new DownloadState();
+        try(Cursor cursor=downloads.query(new DownloadManager.Query().setFilterById(id))){
+            if(cursor!=null&&cursor.moveToFirst()){
+                out.state=cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+                out.done=cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR));
+                out.total=cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES));
+                if(out.state==DownloadManager.STATUS_SUCCESSFUL)out.message="Complete";
+                else if(out.state==DownloadManager.STATUS_RUNNING)out.message="Downloading";
+                else if(out.state==DownloadManager.STATUS_PENDING)out.message="Queued";
+                else if(out.state==DownloadManager.STATUS_PAUSED)out.message="Waiting for network or retry";
+                else out.message="Download failed · Retry to refresh the link";
+            }
+        }catch(Exception e){out.message="Unable to read download status";}
+        return out;
+    }
+    private static final class DownloadRow{
+        TextView status;ProgressBar progress;Button open,share,cancel,retry;
+    }
+    private void renderDownloads(){
+        downloadsList.removeAllViews();downloadRows.clear();
+        ArrayList<JSONObject> records=store.list("downloads");
+        if(records.isEmpty()){ui.add(downloadsList,ui.text("Your downloads will appear here.",15,ui.muted,false),24);return;}
+        for(JSONObject record:records){
+            long id=record.optLong("id");LinearLayout card=ui.card();ui.add(downloadsList,card,12);
+            TextView title=ui.text(record.optString("name"),13,ui.text,true);title.setMaxLines(2);ui.add(card,title,0);
+            DownloadRow row=new DownloadRow();row.status=ui.text("",12,ui.muted,false);ui.add(card,row.status,8);
+            row.progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);row.progress.setMax(100);ui.add(card,row.progress,8);
+            LinearLayout actions=ui.row();ui.add(card,actions,12);
+            row.open=ui.button("Open",true);row.share=ui.button("Share file",false);row.cancel=ui.button("Cancel",false);row.retry=ui.button("Retry",true);
+            ui.weight(actions,row.open,0);ui.weight(actions,row.share,8);ui.weight(actions,row.cancel,0);ui.weight(actions,row.retry,0);
+            row.open.setOnClickListener(v->openDownload(record,false));row.share.setOnClickListener(v->openDownload(record,true));
+            row.cancel.setOnClickListener(v->{downloads.remove(id);refreshDownloads();});
+            row.retry.setOnClickListener(v->retry(record,row.retry));
+            downloadRows.put(id,row);
+        }
+        refreshDownloads();
+    }
+    private void refreshDownloads(){
+        for(Map.Entry<Long,DownloadRow> entry:downloadRows.entrySet()){
+            DownloadState state=query(entry.getKey());DownloadRow row=entry.getValue();
+            boolean complete=state.state==DownloadManager.STATUS_SUCCESSFUL;
+            boolean running=state.state==DownloadManager.STATUS_PENDING||state.state==DownloadManager.STATUS_RUNNING||state.state==DownloadManager.STATUS_PAUSED;
+            String bytes=state.done>0?" · "+Ui.bytes(state.done)+(state.total>0?" / "+Ui.bytes(state.total):""):"";
+            row.status.setText(state.message+bytes);
+            row.progress.setVisibility(running?View.VISIBLE:View.GONE);row.progress.setIndeterminate(state.total<=0);
+            if(state.total>0)row.progress.setProgress((int)Math.min(100,state.done*100/state.total));
+            row.open.setVisibility(complete?View.VISIBLE:View.GONE);row.share.setVisibility(complete?View.VISIBLE:View.GONE);
+            row.cancel.setVisibility(running?View.VISIBLE:View.GONE);row.retry.setVisibility(!complete&&!running?View.VISIBLE:View.GONE);
+        }
+    }
+    private void retry(JSONObject record,Button button){
+        button.setEnabled(false);button.setText("Refreshing…");
+        io.execute(()->{
+            try{
+                MediaApi.Post fresh=MediaApi.resolve(record.optString("source"));int index=record.optInt("index");
+                if(index>=fresh.items.size())throw new Exception("This item is no longer available.");
+                runOnUiThread(()->{
+                    if(isFinishing())return;
+                    if(enqueueInternal(fresh,index)){
+                        ArrayList<JSONObject> all=store.list("downloads");
+                        all.removeIf(x->x.optLong("id")==record.optLong("id"));store.write("downloads",all);renderDownloads();
+                    }else{button.setEnabled(true);button.setText("Retry");}
+                });
+            }catch(Exception e){runOnUiThread(()->{if(!isFinishing()){button.setEnabled(true);button.setText("Retry");message("Unable to refresh the link. Try opening it in Studio.");}});}
+        });
+    }
+    private void openDownload(JSONObject record,boolean share){
+        Uri uri=downloads.getUriForDownloadedFile(record.optLong("id"));
+        if(uri==null){message("The file was moved or removed");return;}
+        try{
+            String type=mime(record.optString("name"),record.optBoolean("video"));
+            if(share){
+                Intent intent=new Intent(Intent.ACTION_SEND).setType(type).putExtra(Intent.EXTRA_STREAM,uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(intent,"Share downloaded media"));
+            }else{
+                Intent intent=new Intent(this,record.optBoolean("video")?FullscreenActivity.class:ImageActivity.class);
+                intent.putExtra("url",uri.toString());intent.putExtra("title",record.optString("name"));startActivity(intent);
+            }
+        }catch(Exception e){message("Unable to open this file");}
+    }
+    private void message(String value){Toast.makeText(this,value,Toast.LENGTH_SHORT).show();}
 }
