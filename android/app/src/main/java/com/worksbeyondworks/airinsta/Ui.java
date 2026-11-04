@@ -11,6 +11,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 final class Ui {
+    static void systemBars(Activity activity,boolean light,int color){
+        activity.getWindow().setStatusBarColor(color);activity.getWindow().setNavigationBarColor(color);
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            android.view.WindowInsetsController c=activity.getWindow().getInsetsController();
+            if(c!=null){int mask=android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;c.setSystemBarsAppearance(light?mask:0,mask);}
+        }else activity.getWindow().getDecorView().setSystemUiVisibility(light?View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR:0);
+    }
     final Activity activity;
     final int bg,panel,text,muted,field,secondary,accent;
     final boolean light;

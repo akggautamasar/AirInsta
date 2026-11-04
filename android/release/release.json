@@ -1,7 +1,7 @@
 {
   "version": "1.1.0",
-  "source_commit": "8b68d3b55cb0b9b7bf6abd4120461a8d99b46bb2",
+  "source_commit": "6957577785d649cca83d1dd8339e26671cbab7df",
   "certificate_sha256": "18f50f9bd415567995992a058aa96159c3e30da19690d544a3029218675d9ac3",
-  "apk_sha256": "875f65de3fc15a1083a11020d11a27e5d22d346b4c008fe44dd0a7f42e99b498",
+  "apk_sha256": "aac8dfc5d9cfa6af6b305536794e1be134a55335b7cf97c931a0aee5e95b9a84",
   "apk": "AirInsta-v1.1.0.apk"
 }

@@ -6,7 +6,7 @@ An independent native Android app for viewing and saving public Instagram media.
 - Saved links and recent links with search and local persistence.
 - A Downloads screen with progress, cancellation, fresh-link retries, file opening and sharing.
 - Optional Wi-Fi-only downloads and background download notifications.
-- Fullscreen video controls with playback speed, looping and picture-in-picture on supported devices.
+- Fullscreen video controls with seeking, 10-second skip buttons, playback speed, looping and picture-in-picture on supported devices.
 - A photo viewer with pinch zoom, panning and double-tap reset.
 - Light and dark appearance, caption copying and sharing links from Instagram.
 - An optimized, non-debuggable APK signed with a persistent release key.
