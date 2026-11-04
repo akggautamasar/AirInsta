@@ -433,7 +433,12 @@ public final class MainActivity extends Activity {
                 else if(out.state==DownloadManager.STATUS_RUNNING)out.message="Downloading";
                 else if(out.state==DownloadManager.STATUS_PENDING)out.message="Queued";
                 else if(out.state==DownloadManager.STATUS_PAUSED)out.message="Waiting for network or retry";
-                else out.message="Download failed · Retry to refresh the link";
+                else {
+                    int reason=cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON));
+                    if(reason==DownloadManager.ERROR_INSUFFICIENT_SPACE)out.message="Download failed · Free some storage and retry";
+                    else if(reason==DownloadManager.ERROR_FILE_ERROR)out.message="Download failed · Unable to save the file";
+                    else out.message="Download failed · Retry to refresh the link";
+                }
             }
         }catch(Exception e){out.message="Unable to read download status";}
         return out;

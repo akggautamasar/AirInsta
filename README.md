@@ -43,7 +43,11 @@ To run the static interface locally with working API functions, use `vercel dev`
 
 `android/` is a separate Android application written in Java with native controls, not a website wrapper. It supports Android 10 and newer. The app calls the existing AirInsta API and therefore needs an internet connection; its interface and Android Downloads integration are separate from the website.
 
-Open `android/` in Android Studio with JDK 17 and Android SDK 35, or build with Gradle 8.10.2 using `gradle :app:assembleDebug`. The debug APK is produced at `android/app/build/outputs/apk/debug/app-debug.apk`. The Android GitHub Actions workflow builds the same installable debug APK and keeps it as an Actions artifact. A production release needs a private signing key and a release build.
+Version 1.1.0 adds a searchable saved/recent library, a download manager with progress and file sharing, optional Wi-Fi-only downloads, light/dark appearance, caption copying, a zoomable image viewer and fullscreen video speed/loop/picture-in-picture controls.
+
+Open `android/` in Android Studio with JDK 17 and Android SDK 35, or build with Gradle 8.10.2 using `gradle :app:assembleDebug :app:assembleRelease`. The build workflow also runs Android release lint. The unsigned release APK is produced at `android/app/build/outputs/apk/release/app-release-unsigned.apk`; sign it with the private release key before distribution. Keep the key and password outside the repository. The optimized release build is not debuggable.
+
+Signed release files are published through the release workflow only after signature/package verification and an emulator check of installation, public-link resolution, playback, saved-link persistence, a complete download and playback of that downloaded file. The exact signed APK is tested before publication. Release binaries are staged on a separate distribution branch; signing credentials are never committed.
 
 ## API response compatibility
 

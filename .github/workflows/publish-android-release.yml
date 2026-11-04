@@ -1,0 +1,71 @@
+name: Verify and publish Android release
+on:
+  push:
+    branches: ['release/android-*']
+    paths: ['android/release/**', '.github/workflows/publish-android-release.yml', 'android/smoke-test.sh']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      ANDROID_AVD_HOME: /home/runner/.android/avd
+      AIRINSTA_APK_PATH: android/release/AirInsta-v1.1.0.apk
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android verification and emulator tools
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-airinsta-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" "build-tools;35.0.0" "system-images;android-35;google_apis;x86_64"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n airinsta_smoke -k "system-images;android-35;google_apis;x86_64" --path "$ANDROID_AVD_HOME/airinsta_smoke.avd" --force
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx airinsta_smoke
+      - name: Verify release signature, checksum and package
+        run: |
+          (cd android/release && sha256sum -c SHA256SUMS)
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$AIRINSTA_APK_PATH" > signing-verification.txt
+          cat signing-verification.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$AIRINSTA_APK_PATH" > package-verification.txt
+          if grep -q application-debuggable package-verification.txt; then echo 'Release must not be debuggable'; exit 1; fi
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          m=json.loads(Path("android/release/release.json").read_text())
+          assert m["version"]=="1.1.0"
+          assert re.fullmatch("[0-9a-f]{40}",m["source_commit"])
+          assert m["certificate_sha256"] in Path("signing-verification.txt").read_text()
+          assert "name='com.worksbeyondworks.airinsta'" in Path("package-verification.txt").read_text()
+          assert "versionName='1.1.0'" in Path("package-verification.txt").read_text()
+          PY
+      - name: Test installation, playback, saved links and downloads
+        run: bash android/smoke-test.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-verification
+          path: |
+            android-*.png
+            android-window.xml
+            signing-verification.txt
+            package-verification.txt
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Publish the verified release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          source_sha="$(python3 -c 'import json; print(json.load(open("android/release/release.json"))["source_commit"])')"
+          gh release create v1.1.0 --target "$source_sha" --title "AirInsta Android v1.1.0" --notes-file android/release-notes.md "$AIRINSTA_APK_PATH" android/release/SHA256SUMS
+

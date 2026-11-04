@@ -128,6 +128,7 @@ final class MediaApi {
         try (InputStream in = stream; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buf = new byte[8192]; int n, total = 0;
             while ((n = in.read(buf)) != -1) {
+                if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("Request canceled");
                 total += n; if (total > limit) throw new Exception("The response is too large.");
                 out.write(buf, 0, n);
             }
