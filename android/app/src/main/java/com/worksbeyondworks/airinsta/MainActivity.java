@@ -323,7 +323,7 @@ public final class MainActivity extends Activity {
                 });
             }catch(Exception e){runOnUiThread(()->{
                 if(request!=generation||isFinishing())return;setBusy(false);
-                status.setText(e.getMessage()==null?"Unable to resolve this link. Try again.":e.getMessage());
+                status.setText(MediaApi.message(e));
             });}
         });
     }

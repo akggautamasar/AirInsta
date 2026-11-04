@@ -3,7 +3,8 @@
     <application android:label="AirInsta" android:theme="@style/AppTheme"
         android:icon="@drawable/ic_app" android:usesCleartextTraffic="false" android:allowBackup="false">
         <activity android:name=".FullscreenActivity" android:exported="false"
-            android:supportsPictureInPicture="true" android:resizeableActivity="true" />
+            android:supportsPictureInPicture="true" android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation" />
         <activity android:name=".ImageActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

@@ -22,6 +22,13 @@ import java.util.regex.Pattern;
 
 final class MediaApi {
     static final String API = "https://airinsta.vercel.app";
+    static String message(Exception error) {
+        if(error instanceof java.net.UnknownHostException) return "No internet connection. Check your network and try again.";
+        if(error instanceof java.net.SocketTimeoutException) return "The service is taking too long. Please try again.";
+        if(error instanceof javax.net.ssl.SSLException) return "Unable to establish a secure connection. Please try again.";
+        if(error instanceof java.io.IOException) return "Unable to reach the media service. Please try again.";
+        return error.getMessage()==null?"Unable to resolve this link. Try again.":error.getMessage();
+    }
     static final class Item {
         final String url;
         final boolean video;

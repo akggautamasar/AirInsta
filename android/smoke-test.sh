@@ -4,12 +4,20 @@ export PATH="$ANDROID_HOME/platform-tools:$PATH"
 airinsta_apk="$(printenv AIRINSTA_APK_PATH || true)"
 if [[ -z "$airinsta_apk" ]]; then airinsta_apk="android/app/build/outputs/apk/debug/app-debug.apk"; fi
 
-"$ANDROID_HOME/emulator/emulator" -avd airinsta_smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > /tmp/airinsta-emulator.log 2>&1 &
+"$ANDROID_HOME/emulator/emulator" -avd airinsta_smoke -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -dns-server 8.8.8.8,8.8.4.4 > /tmp/airinsta-emulator.log 2>&1 &
 if ! timeout 180 adb wait-for-device; then cat /tmp/airinsta-emulator.log; exit 1; fi
 timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == "1" ]]; do sleep 3; done'
 adb shell input keyevent 82
 adb shell wm size 1080x1920
 adb shell wm density 420
+adb shell svc wifi enable
+airinsta_dns_ready=0
+for attempt in $(seq 1 15); do
+  airinsta_dns_check="$(adb shell ping -c 1 -W 1 airinsta.vercel.app 2>&1 || true)"
+  if [[ "$airinsta_dns_check" == *"PING airinsta.vercel.app ("* ]]; then airinsta_dns_ready=1; break; fi
+  sleep 3
+done
+if [[ "$airinsta_dns_ready" != 1 ]]; then echo 'Emulator DNS did not become available'; cat /tmp/airinsta-emulator.log; exit 1; fi
 adb install -r "$airinsta_apk"
 adb logcat -c
 

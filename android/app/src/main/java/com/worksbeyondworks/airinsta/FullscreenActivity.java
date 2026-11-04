@@ -130,5 +130,6 @@ public final class FullscreenActivity extends Activity {
         if(video!=null&&!isInPictureInPictureMode()&&video.isPlaying()){savedPosition=video.getCurrentPosition();video.pause();}
         super.onPause();
     }
+    @Override protected void onStop(){if(video!=null)video.pause();super.onStop();}
     @Override protected void onDestroy(){handler.removeCallbacksAndMessages(null);if(video!=null)video.stopPlayback();super.onDestroy();}
 }
