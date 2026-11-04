@@ -26,7 +26,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.MediaController;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -61,7 +60,7 @@ public final class MainActivity extends Activity {
     private FrameLayout stage;
     private TextView status, creator, caption, position, detail, hint;
     private VideoView video;
-    private Button previous, next, downloadAll, fullScreen;
+    private Button previous, next, downloadAll, fullScreen, inlinePlay;
     private final Runnable poll = new Runnable() {
         @Override public void run() {
             if (tab == 2) refreshDownloads();
@@ -94,10 +93,15 @@ public final class MainActivity extends Activity {
         }
         super.onSaveInstanceState(out);
     }
-    @Override protected void onResume() { super.onResume(); handler.post(poll); }
+    @Override protected void onResume() {
+        super.onResume();
+        if(post!=null&&!post.items.isEmpty()&&tab==0&&video==null&&post.items.get(active).video)showMedia(active);
+        handler.post(poll);
+    }
     @Override protected void onPause() {
         handler.removeCallbacks(poll);
         if (video != null && video.isPlaying()) video.pause();
+        if(inlinePlay!=null)inlinePlay.setText("Play preview");
         super.onPause();
     }
     @Override protected void onDestroy() {
@@ -146,6 +150,7 @@ public final class MainActivity extends Activity {
             tabs[i].setOnClickListener(v -> selectTab(target));
         }
         root.addView(navigation); setContentView(root);
+        Ui.systemBars(this,ui.light,ui.bg);
         if (post != null && !post.items.isEmpty()) { input.setText(post.source); renderResult(); }
         if (busy) { setBusy(true); status.setText("Finding your media…"); }
         selectTab(tab);
@@ -183,6 +188,8 @@ public final class MainActivity extends Activity {
         stage=new FrameLayout(this);stage.setBackground(ui.shape(Color.BLACK,12));stage.setClipToOutline(true);
         LinearLayout.LayoutParams stageParams=new LinearLayout.LayoutParams(-1,ui.dp(300));stageParams.topMargin=ui.dp(14);result.addView(stage,stageParams);
         hint=ui.text("Full frame preview",11,ui.muted,false);hint.setGravity(Gravity.CENTER);ui.add(result,hint,8);
+        inlinePlay=ui.button("Play preview",false);ui.add(result,inlinePlay,8);
+        inlinePlay.setOnClickListener(v->toggleInline());
         LinearLayout nav=ui.row();ui.add(result,nav,10);
         position=ui.text("",13,ui.muted,true);nav.addView(position,new LinearLayout.LayoutParams(0,ui.dp(46),1));
         previous=ui.button("‹",false);next=ui.button("›",false);
@@ -287,6 +294,7 @@ public final class MainActivity extends Activity {
         tab=Math.max(0,Math.min(2,selected));
         for(int i=0;i<pages.length;i++){pages[i].setVisibility(i==tab?View.VISIBLE:View.GONE);tabs[i].setTextColor(i==tab?ui.accent:ui.muted);}
         if(tab!=0&&video!=null&&video.isPlaying())video.pause();
+        if(tab!=0&&inlinePlay!=null)inlinePlay.setText("Play preview");
         if(tab==1)renderLibrary();if(tab==2)renderDownloads();
     }
     private void paste() {
@@ -351,11 +359,12 @@ public final class MainActivity extends Activity {
         previous.setEnabled(post.items.size()>1);next.setEnabled(post.items.size()>1);
         downloadAll.setVisibility(post.items.size()>1?View.VISIBLE:View.GONE);
         fullScreen.setText(item.video?"Watch fullscreen":"Open photo viewer");
-        hint.setText(item.video?"Full frame preview · Tap play for video controls":"Tap the image to zoom");
+        hint.setText(item.video?"Full frame preview · Open fullscreen for more controls":"Tap the image to zoom");
+        inlinePlay.setVisibility(item.video?View.VISIBLE:View.GONE);inlinePlay.setText("Play preview");
         if(item.video){
             VideoView player=new VideoView(this);video=player;
             stage.addView(player,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-            MediaController controller=new MediaController(this);controller.setAnchorView(stage);player.setMediaController(controller);
+            player.setOnClickListener(v->toggleInline());
             player.setOnPreparedListener(mp->{
                 if(video!=player)return;sizeStage(mp.getVideoWidth(),mp.getVideoHeight());mp.seekTo(1);
                 detail.setText(post.items.size()+" item"+(post.items.size()==1?"":"s")+" · "+mp.getVideoWidth()+" × "+mp.getVideoHeight()+" · "+Ui.time(mp.getDuration()));
@@ -389,8 +398,13 @@ public final class MainActivity extends Activity {
         MediaApi.Item item=post.items.get(active);
         Intent intent=new Intent(this,item.video?FullscreenActivity.class:ImageActivity.class);
         intent.putExtra("url",item.url);intent.putExtra("title",post.username.isEmpty()?"AirInsta":"@"+post.username);
-        if(item.video){intent.putExtra("proxy",MediaApi.proxy(item.url,false,""));intent.putExtra("position",video==null?0:video.getCurrentPosition());if(video!=null)video.pause();}
+        if(item.video){intent.putExtra("proxy",MediaApi.proxy(item.url,false,""));intent.putExtra("position",video==null?0:video.getCurrentPosition());stopInline();}
         startActivity(intent);
+    }
+    private void toggleInline(){
+        if(video==null)return;
+        if(video.isPlaying()){video.pause();inlinePlay.setText("Play preview");}
+        else{video.start();inlinePlay.setText("Pause preview");}
     }
     private void shareText(String value){
         Intent share=new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,value);

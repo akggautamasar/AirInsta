@@ -17,7 +17,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.MediaController;
+import android.widget.SeekBar;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.VideoView;
@@ -25,7 +25,8 @@ import android.widget.VideoView;
 public final class FullscreenActivity extends Activity {
     private VideoView video;
     private MediaPlayer player;
-    private MediaController controller;
+    private SeekBar timeline;
+    private boolean seeking;
     private LinearLayout header, footer;
     private TextView status;
     private Button play, speedButton, loopButton;
@@ -37,10 +38,12 @@ public final class FullscreenActivity extends Activity {
         public void run(){
             if(video!=null&&player!=null){
                 boolean playing=video.isPlaying();
-                status.setText((playing?"Playing":"Paused")+" · "+Ui.time(video.getCurrentPosition())+" / "+Ui.time(video.getDuration())+" · "+width+" × "+height);
+                String label=(playing?"Playing":"Paused")+" · "+Ui.time(video.getCurrentPosition())+" / "+Ui.time(video.getDuration())+" · "+width+" × "+height;
+                if(!label.contentEquals(status.getText()))status.setText(label);
+                if(!seeking&&video.getDuration()>0)timeline.setProgress((int)(video.getCurrentPosition()*1000L/video.getDuration()));
                 play.setText(playing?"Pause":"Play");
             }
-            handler.postDelayed(this,500);
+            handler.postDelayed(this,1500);
         }
     };
 
@@ -65,13 +68,24 @@ public final class FullscreenActivity extends Activity {
         FrameLayout stage=new FrameLayout(this);
         root.addView(stage,new LinearLayout.LayoutParams(-1,0,1));
         video=new VideoView(this);stage.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-        controller=new MediaController(this);controller.setAnchorView(stage);video.setMediaController(controller);
+
         footer=ui.column();footer.setPadding(ui.dp(12),ui.dp(6),ui.dp(12),ui.dp(10));
         status=ui.text("Loading video…",11,ui.muted,false);status.setContentDescription("Playback status");ui.add(footer,status,0);
+        timeline=new SeekBar(this);timeline.setMax(1000);timeline.setContentDescription("Video seek bar");ui.add(footer,timeline,5);
+        timeline.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
+            public void onProgressChanged(SeekBar bar,int value,boolean fromUser){}
+            public void onStartTrackingTouch(SeekBar bar){seeking=true;}
+            public void onStopTrackingTouch(SeekBar bar){if(player!=null&&video.getDuration()>0)video.seekTo((int)(video.getDuration()*bar.getProgress()/1000L));seeking=false;}
+        });
+        LinearLayout transport=ui.row();ui.add(footer,transport,5);
+        Button rewind=ui.button("−10 seconds",false),forward=ui.button("+10 seconds",false);
+        play=ui.button("Play",true);ui.weight(transport,rewind,0);ui.weight(transport,play,6);ui.weight(transport,forward,6);
+        rewind.setOnClickListener(v->{if(player!=null)video.seekTo(Math.max(0,video.getCurrentPosition()-10000));});
+        forward.setOnClickListener(v->{if(player!=null)video.seekTo(Math.min(video.getDuration(),video.getCurrentPosition()+10000));});
         LinearLayout actions=ui.row();ui.add(footer,actions,8);
-        play=ui.button("Play",true);speedButton=ui.button(speedLabel(),false);loopButton=ui.button(loop?"Loop on":"Loop off",false);Button pip=ui.button("Mini player",false);
-        ui.weight(actions,play,0);ui.weight(actions,speedButton,6);ui.weight(actions,loopButton,6);ui.weight(actions,pip,6);
-        play.setOnClickListener(v->{if(player==null)return;if(video.isPlaying())video.pause();else video.start();});
+        speedButton=ui.button(speedLabel(),false);loopButton=ui.button(loop?"Loop on":"Loop off",false);Button pip=ui.button("Mini player",false);
+        ui.weight(actions,speedButton,0);ui.weight(actions,loopButton,6);ui.weight(actions,pip,6);
+        play.setOnClickListener(v->{if(player==null)return;if(video.isPlaying()){video.pause();play.setText("Play");}else{video.start();play.setText("Pause");}});
         speedButton.setOnClickListener(v->{
             PopupMenu menu=new PopupMenu(this,speedButton);
             float[] rates={.5f,.75f,1f,1.25f,1.5f,2f};
@@ -85,7 +99,7 @@ public final class FullscreenActivity extends Activity {
         video.setOnPreparedListener(mp->{
             player=mp;width=mp.getVideoWidth();height=mp.getVideoHeight();mp.setLooping(loop);
             applySpeed();if(savedPosition>0)video.seekTo(savedPosition);if(wantPlay)video.start();
-            controller.show(3000);handler.removeCallbacks(tick);handler.post(tick);
+            handler.removeCallbacks(tick);handler.post(tick);
         });
         video.setOnCompletionListener(mp->{wantPlay=false;play.setText("Play");});
         video.setOnErrorListener((mp,what,extra)->{
@@ -120,7 +134,7 @@ public final class FullscreenActivity extends Activity {
     @Override protected void onUserLeaveHint(){super.onUserLeaveHint();if(video!=null&&video.isPlaying())miniPlayer();}
     @Override public void onPictureInPictureModeChanged(boolean pip,Configuration configuration){
         super.onPictureInPictureModeChanged(pip,configuration);
-        header.setVisibility(pip?View.GONE:View.VISIBLE);footer.setVisibility(pip?View.GONE:View.VISIBLE);if(pip)controller.hide();
+        header.setVisibility(pip?View.GONE:View.VISIBLE);footer.setVisibility(pip?View.GONE:View.VISIBLE);
     }
     @Override protected void onSaveInstanceState(Bundle state){
         state.putInt("position",video.getCurrentPosition());state.putBoolean("playing",video.isPlaying());
