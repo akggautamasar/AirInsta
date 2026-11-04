@@ -24,6 +24,13 @@ adb logcat -c
 dump_ui() {
   adb shell uiautomator dump /sdcard/airinsta-window.xml >/dev/null
   adb exec-out cat /sdcard/airinsta-window.xml > android-window.xml
+  # Android's floating MediaController is a separate accessibility window.
+  # Dismiss it before inspecting the activity underneath.
+  if grep -q 'class="android.widget.MediaController"' android-window.xml; then
+    adb shell input keyevent 4
+    adb shell uiautomator dump /sdcard/airinsta-window.xml >/dev/null
+    adb exec-out cat /sdcard/airinsta-window.xml > android-window.xml
+  fi
 }
 capture() {
   timeout 10 adb exec-out screencap -p > android-smoke.png || true
